@@ -6,30 +6,81 @@ import {
     type ExpenseFilter,
     type ExpenseListResponse
 } from '../schema';
+import { db } from '../db';
+import { expensesTable, usersTable, categoriesTable, teamsTable, type NewExpense } from '../db/schema';
+import { eq } from 'drizzle-orm';
 
 export async function createExpense(input: CreateExpenseInput): Promise<Expense> {
-    // This is a placeholder declaration! Real code should be implemented here.
-    // The goal of this handler is to create a new expense entry with receipt upload
-    return Promise.resolve({
-        id: 0,
-        user_id: input.user_id,
-        team_id: input.team_id || null,
-        category_id: input.category_id,
-        title: input.title,
-        description: input.description || null,
-        amount: input.amount,
-        receipt_url: input.receipt_url || null,
-        tags: input.tags || [],
-        status: 'PENDING',
-        is_recurring: input.is_recurring || false,
-        recurring_frequency: input.recurring_frequency || null,
-        recurring_end_date: input.recurring_end_date || null,
-        expense_date: input.expense_date,
-        approved_by: null,
-        approved_at: null,
-        created_at: new Date(),
-        updated_at: new Date()
-    } as Expense);
+    try {
+        // Verify foreign key constraints before insertion
+        
+        // Check if user exists
+        const userExists = await db.select()
+            .from(usersTable)
+            .where(eq(usersTable.id, input.user_id))
+            .execute();
+        
+        if (userExists.length === 0) {
+            throw new Error(`User with id ${input.user_id} does not exist`);
+        }
+
+        // Check if category exists
+        const categoryExists = await db.select()
+            .from(categoriesTable)
+            .where(eq(categoriesTable.id, input.category_id))
+            .execute();
+        
+        if (categoryExists.length === 0) {
+            throw new Error(`Category with id ${input.category_id} does not exist`);
+        }
+
+        // Check if team exists (if team_id is provided)
+        if (input.team_id) {
+            const teamExists = await db.select()
+                .from(teamsTable)
+                .where(eq(teamsTable.id, input.team_id))
+                .execute();
+            
+            if (teamExists.length === 0) {
+                throw new Error(`Team with id ${input.team_id} does not exist`);
+            }
+        }
+
+        // Insert expense record
+        const insertData: NewExpense = {
+            user_id: input.user_id,
+            team_id: input.team_id || null,
+            category_id: input.category_id,
+            title: input.title,
+            description: input.description || null,
+            amount: input.amount.toString(), // Convert number to string for numeric column
+            receipt_url: input.receipt_url || null,
+            tags: input.tags || [], // JSONB field accepts array directly
+            status: 'PENDING',
+            is_recurring: input.is_recurring || false,
+            recurring_frequency: input.recurring_frequency || null,
+            recurring_end_date: input.recurring_end_date ? input.recurring_end_date.toISOString().split('T')[0] : null,
+            expense_date: input.expense_date.toISOString().split('T')[0] // Convert Date to YYYY-MM-DD string
+        };
+
+        const result = await db.insert(expensesTable)
+            .values(insertData)
+            .returning()
+            .execute();
+
+        // Convert numeric and date fields back to proper types before returning
+        const expense = result[0];
+        return {
+            ...expense,
+            amount: parseFloat(expense.amount), // Convert string back to number
+            tags: expense.tags as string[], // Type assertion for JSON field
+            expense_date: new Date(expense.expense_date), // Convert string to Date
+            recurring_end_date: expense.recurring_end_date ? new Date(expense.recurring_end_date) : null // Convert string to Date if exists
+        };
+    } catch (error) {
+        console.error('Expense creation failed:', error);
+        throw error;
+    }
 }
 
 export async function getExpenses(filter: ExpenseFilter): Promise<ExpenseListResponse> {
